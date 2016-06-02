@@ -1,14 +1,16 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 
 module Control.SafeAccess
-  ( ensureAccess
-  , Capability(..)
+  ( Capability(..)
   , Capabilities
   , AccessDecision(..)
   , SafeAccessT(..)
   , MonadSafeAccess(..)
+  , ensureAccess
+  , passthroughCapability
   , liftExceptT
   ) where
 
@@ -25,23 +27,27 @@ import Control.Monad.Trans.RWS (RWST)
 import Control.Monad.Writer
 
 import Data.List
+import Data.Monoid
 
 -- | Check that the access is legal or make the monad \"fail\".
-ensureAccess :: MonadSafeAccess d m => d -> m ()
+ensureAccess :: MonadSafeAccess d m s => d -> m ()
 ensureAccess descr = do
-  caps <- getCapabilities
-  let decisions     = map (\cap -> runCapability cap descr) caps
-      finalDecision = foldl' mergeDecisions AccessDeniedSoft decisions
-  case finalDecision of
-    AccessGranted     -> return ()
-    _                 -> denyAccess descr
+  caps      <- getCapabilities
+  decisions <- liftSub $ mapM (\cap -> runCapability cap descr) caps
+  case mconcat decisions of
+    AccessGranted -> return ()
+    _             -> denyAccess descr
 
 -- | Allow things to be accessed. See 'ensureAccess'.
 --
 -- @d@ is the type describing an access.
-newtype Capability d = MkCapability { runCapability :: d -> AccessDecision }
+newtype Capability m d = MkCapability { runCapability :: d -> m AccessDecision }
 
-type Capabilities d = [Capability d]
+type Capabilities m d = [Capability m d]
+
+-- | A special capability which allows every access. Be careful with this!
+passthroughCapability :: Monad m => Capability m d
+passthroughCapability = MkCapability $ \_ -> return AccessGranted
 
 -- | Control the decision process.
 --
@@ -54,20 +60,21 @@ data AccessDecision
   | AccessDenied      -- ^ Final no
   deriving (Show, Eq)
 
-mergeDecisions :: AccessDecision -> AccessDecision -> AccessDecision
-mergeDecisions a b = case (a, b) of
-  (AccessDeniedSoft, _)  -> b
-  (_, AccessDeniedSoft)  -> a
-  (AccessGranted, _)     -> b
-  (_, AccessGranted)     -> a
-  _                      -> AccessDenied
+instance Monoid AccessDecision where
+  mempty      = AccessDeniedSoft
+  mappend a b = case (a, b) of
+    (AccessDeniedSoft, _) -> b
+    (_, AccessDeniedSoft) -> a
+    (AccessGranted, _)    -> b
+    (_, AccessGranted)    -> a
+    _                     -> AccessDenied
 
--- | A simple monad (transformer) to ensure that data are accessed legitimately.
+-- | A simple monad transformer to ensure that data are accessed legitimately.
 --
 -- The return value is either the description of an access having been denied
 -- (left) or the result of the normal computation (right).
 newtype SafeAccessT d m a
-  = SafeAccessT { runSafeAccessT :: Capabilities d -> m (Either d a) }
+  = SafeAccessT { runSafeAccessT :: Capabilities m d -> m (Either d a) }
 
 instance Monad m => Monad (SafeAccessT d m) where
   return = SafeAccessT . const . return . Right
@@ -96,18 +103,20 @@ instance Applicative f => Applicative (SafeAccessT d f) where
 instance MonadIO m => MonadIO (SafeAccessT d m) where
   liftIO = SafeAccessT . const . (Right `liftM`) . liftIO
 
-getCapabilities' :: Monad m => SafeAccessT d m (Capabilities d)
+getCapabilities' :: Monad m => SafeAccessT d m (Capabilities m d)
 getCapabilities' = SafeAccessT $ return . Right
 
 denyAccess' :: Monad m => d -> SafeAccessT d m ()
 denyAccess' = SafeAccessT . const . return . Left
 
-class Monad m => MonadSafeAccess d m where
-  getCapabilities :: m (Capabilities d)
+class (Monad m, Monad s) => MonadSafeAccess d m s | m -> s, m -> d where
+  getCapabilities :: m (Capabilities s d)
+  liftSub         :: s a -> m a
   denyAccess      :: d -> m ()
 
-instance Monad m => MonadSafeAccess d (SafeAccessT d m) where
+instance Monad m => MonadSafeAccess d (SafeAccessT d m) m where
   getCapabilities = getCapabilities'
+  liftSub         = lift
   denyAccess      = denyAccess'
 
 -- | Lift an action from 'ErrorT' to 'SafeAccessT'.
@@ -143,36 +152,48 @@ instance MonadWriter w m => MonadWriter w (SafeAccessT d m) where
           Right (x, f) -> (Right x, f)
     pass mpe
 
-instance MonadSafeAccess d m => MonadSafeAccess d (ContT e m) where
+liftCapability :: (Monad m, MonadTrans t)
+               => Capability m d -> Capability (t m) d
+liftCapability cap = MkCapability $ \descr -> lift $ runCapability cap descr
+
+instance MonadSafeAccess d m s => MonadSafeAccess d (ContT e m) s where
   getCapabilities = lift getCapabilities
+  liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
 
-instance MonadSafeAccess d m => MonadSafeAccess d (ExceptT e m) where
+instance MonadSafeAccess d m s => MonadSafeAccess d (ExceptT e m) s where
   getCapabilities = lift getCapabilities
+  liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
 
-instance MonadSafeAccess d m => MonadSafeAccess d (IdentityT m) where
+instance MonadSafeAccess d m s => MonadSafeAccess d (IdentityT m) s where
   getCapabilities = lift getCapabilities
+  liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
 
-instance MonadSafeAccess d m => MonadSafeAccess d (ListT m) where
+instance MonadSafeAccess d m s => MonadSafeAccess d (ListT m) s where
   getCapabilities = lift getCapabilities
+  liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
 
-instance MonadSafeAccess d m => MonadSafeAccess d (MaybeT m) where
+instance MonadSafeAccess d m s => MonadSafeAccess d (MaybeT m) s where
   getCapabilities = lift getCapabilities
+  liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
 
-instance MonadSafeAccess d m => MonadSafeAccess d (ReaderT r m) where
+instance MonadSafeAccess d m s => MonadSafeAccess d (ReaderT r m) s where
   getCapabilities = lift getCapabilities
+  liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
 
-instance (MonadSafeAccess d m, Monoid w)
-    => MonadSafeAccess d (RWST r w s m) where
+instance (MonadSafeAccess d m s, Monoid w)
+    => MonadSafeAccess d (RWST r w st m) s where
   getCapabilities = lift getCapabilities
+  liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
 
-instance (MonadSafeAccess d m, Monoid w)
-    => MonadSafeAccess d (WriterT w m) where
+instance (MonadSafeAccess d m s, Monoid w)
+    => MonadSafeAccess d (WriterT w m) s where
   getCapabilities = lift getCapabilities
+  liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess

@@ -28,8 +28,8 @@ Every capability can return a decision. `AccessGranted` and `AccessDenied` are p
     instance AccessDescriptor Descr where
       descrMsg = OtherDescr -- this is for the function fail in Monad
 
-    normalUserCapability :: Capability Descr
-    normalUserCapability = MkCapability $ \descr -> case descr of
+    normalUserCapability :: Capability IO Descr
+    normalUserCapability = MkCapability $ \descr -> return $ case descr of
       AccessA -> AccessGranted
       AccessB -> AccessDenied
       _       -> AccessDeniedSoft
