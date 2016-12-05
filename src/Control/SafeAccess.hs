@@ -43,6 +43,11 @@ ensureAccess descr = do
 -- @d@ is the type describing an access.
 newtype Capability m d = MkCapability { runCapability :: d -> m AccessDecision }
 
+instance Applicative m => Monoid (Capability m d) where
+  mempty = MkCapability $ \_ -> pure mempty
+  mappend cap1 cap2 = MkCapability $ \d ->
+    mappend <$> runCapability cap1 d <*> runCapability cap2 d
+
 type Capabilities m d = [Capability m d]
 
 -- | A special capability which allows every access. Be careful with this!
@@ -76,17 +81,6 @@ instance Monoid AccessDecision where
 newtype SafeAccessT d m a
   = SafeAccessT { runSafeAccessT :: Capabilities m d -> m (Either d a) }
 
-instance Monad m => Monad (SafeAccessT d m) where
-  return = SafeAccessT . const . return . Right
-  ma >>= f = SafeAccessT $ \caps -> do
-    ex <- runSafeAccessT ma caps
-    case ex of
-      Left d  -> return $ Left d
-      Right x -> runSafeAccessT (f x) caps
-
-instance MonadTrans (SafeAccessT d) where
-  lift = SafeAccessT . const . (Right `liftM`)
-
 instance Functor f => Functor (SafeAccessT d f) where
   fmap f sa = SafeAccessT $ \caps -> fmap (fmap f) $ runSafeAccessT sa caps
 
@@ -99,6 +93,17 @@ instance Applicative f => Applicative (SafeAccessT d f) where
                 Left d  -> const $ Left d
                 Right f -> fmap f
     in ff <*> fea
+
+instance Monad m => Monad (SafeAccessT d m) where
+  return = SafeAccessT . const . return . Right
+  ma >>= f = SafeAccessT $ \caps -> do
+    ex <- runSafeAccessT ma caps
+    case ex of
+      Left d  -> return $ Left d
+      Right x -> runSafeAccessT (f x) caps
+
+instance MonadTrans (SafeAccessT d) where
+  lift = SafeAccessT . const . (Right `liftM`)
 
 instance MonadIO m => MonadIO (SafeAccessT d m) where
   liftIO = SafeAccessT . const . (Right `liftM`) . liftIO
