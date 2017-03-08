@@ -10,11 +10,14 @@ module Control.SafeAccess
   , SafeAccessT(..)
   , MonadSafeAccess(..)
   , ensureAccess
+  , unsecureAllow
+  , singleCapability
+  , someCapabilities
   , passthroughCapability
   , liftExceptT
+  , liftCapability
   ) where
 
-import Control.Applicative
 import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader
@@ -25,18 +28,6 @@ import Control.Monad.Trans.List
 import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.RWS (RWST)
 import Control.Monad.Writer
-
-import Data.List
-import Data.Monoid
-
--- | Check that the access is legal or make the monad \"fail\".
-ensureAccess :: MonadSafeAccess d m s => d -> m ()
-ensureAccess descr = do
-  caps      <- getCapabilities
-  decisions <- liftSub $ mapM (\cap -> runCapability cap descr) caps
-  case mconcat decisions of
-    AccessGranted -> return ()
-    _             -> denyAccess descr
 
 -- | Allow things to be accessed. See 'ensureAccess'.
 --
@@ -50,9 +41,18 @@ instance Applicative m => Monoid (Capability m d) where
 
 type Capabilities m d = [Capability m d]
 
+-- | Create a capability which only allows a given access
+singleCapability :: (Applicative f, Eq d) => d -> Capability f d
+singleCapability = someCapabilities . pure
+
+-- | Create a capability which only allows given accesses
+someCapabilities :: (Applicative f, Eq d) => [d] -> Capability f d
+someCapabilities ds = MkCapability $ \d ->
+  pure $ if d `elem` ds then AccessGranted else AccessDeniedSoft
+
 -- | A special capability which allows every access. Be careful with this!
-passthroughCapability :: Monad m => Capability m d
-passthroughCapability = MkCapability $ \_ -> return AccessGranted
+passthroughCapability :: Applicative f => Capability f d
+passthroughCapability = MkCapability $ \_ -> pure AccessGranted
 
 -- | Control the decision process.
 --
@@ -68,11 +68,11 @@ data AccessDecision
 instance Monoid AccessDecision where
   mempty      = AccessDeniedSoft
   mappend a b = case (a, b) of
-    (AccessDeniedSoft, _) -> b
-    (_, AccessDeniedSoft) -> a
-    (AccessGranted, _)    -> b
-    (_, AccessGranted)    -> a
-    _                     -> AccessDenied
+    (AccessDeniedSoft, _)          -> b
+    (_, AccessDeniedSoft)          -> a
+    (AccessDenied, _)              -> AccessDenied
+    (_, AccessDenied)              -> AccessDenied
+    (AccessGranted, AccessGranted) -> AccessGranted
 
 -- | A simple monad transformer to ensure that data are accessed legitimately.
 --
@@ -107,6 +107,26 @@ instance MonadTrans (SafeAccessT d) where
 
 instance MonadIO m => MonadIO (SafeAccessT d m) where
   liftIO = SafeAccessT . const . (Right `liftM`) . liftIO
+
+-- | Check that the access is legal or make the monad \"fail\".
+ensureAccess :: MonadSafeAccess d m s => d -> m ()
+ensureAccess descr = do
+  caps      <- getCapabilities
+  decisions <- liftSub $ mapM (\cap -> runCapability cap descr) caps
+  case mconcat decisions of
+    AccessGranted -> return ()
+    _             -> denyAccess descr
+
+-- | Allow certain accesses regardless of the capabilities. (unsecure!)
+unsecureAllow :: (Monad m, Eq d) => [d] -> SafeAccessT d m a
+              -> SafeAccessT d m a
+unsecureAllow descrs action = do
+  caps <- getCapabilities
+  let cap = MkCapability $ \descr ->
+        if descr `elem` descrs
+          then pure AccessGranted
+          else mconcat <$> sequenceA (map (flip runCapability descr) caps)
+  SafeAccessT $ \_ -> runSafeAccessT action [cap]
 
 getCapabilities' :: Monad m => SafeAccessT d m (Capabilities m d)
 getCapabilities' = SafeAccessT $ return . Right
