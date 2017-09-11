@@ -22,11 +22,11 @@ import Control.Monad
 import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.State
-import Control.Monad.Trans.Cont
+import Control.Monad.Trans.Cont (ContT(..))
 import Control.Monad.Trans.Identity
 import Control.Monad.Trans.List
 import Control.Monad.Trans.Maybe
-import Control.Monad.Trans.RWS (RWST)
+import Control.Monad.Trans.RWS (RWST(..))
 import Control.Monad.Writer
 
 -- | Allow things to be accessed. See 'ensureAccess'.
@@ -134,15 +134,28 @@ getCapabilities' = SafeAccessT $ return . Right
 denyAccess' :: Monad m => d -> SafeAccessT d m ()
 denyAccess' = SafeAccessT . const . return . Left
 
+catchAccessError' :: Monad m => SafeAccessT d m a -> (d -> SafeAccessT d m a)
+                  -> SafeAccessT d m a
+catchAccessError' action handler = SafeAccessT $ \caps -> do
+  eRes <- runSafeAccessT action caps
+  case eRes of
+    Left  descr -> runSafeAccessT (handler descr) caps
+    Right _     -> return eRes
+
 class (Monad m, Monad s) => MonadSafeAccess d m s | m -> s, m -> d where
-  getCapabilities :: m (Capabilities s d)
-  liftSub         :: s a -> m a
-  denyAccess      :: d -> m ()
+  getCapabilities  :: m (Capabilities s d)
+  liftSub          :: s a -> m a
+  denyAccess       :: d -> m ()
+
+  -- | Catch an access error, i.e. an access descriptor which resulted into an
+  -- access denied given the capabilities.
+  catchAccessError :: m a -> (d -> m a) -> m a
 
 instance Monad m => MonadSafeAccess d (SafeAccessT d m) m where
-  getCapabilities = getCapabilities'
-  liftSub         = lift
-  denyAccess      = denyAccess'
+  getCapabilities  = getCapabilities'
+  liftSub          = lift
+  denyAccess       = denyAccess'
+  catchAccessError = catchAccessError'
 
 -- | Lift an action from 'ErrorT' to 'SafeAccessT'.
 liftExceptT :: ExceptT d m a -> SafeAccessT d m a
@@ -185,40 +198,59 @@ instance MonadSafeAccess d m s => MonadSafeAccess d (ContT e m) s where
   getCapabilities = lift getCapabilities
   liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
+  catchAccessError action handler = ContT $ \cont ->
+    catchAccessError (runContT action cont)
+                     (\descr -> runContT (handler descr) cont)
 
 instance MonadSafeAccess d m s => MonadSafeAccess d (ExceptT e m) s where
   getCapabilities = lift getCapabilities
   liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
+  catchAccessError action handler = ExceptT $
+    catchAccessError (runExceptT action) (runExceptT . handler)
 
 instance MonadSafeAccess d m s => MonadSafeAccess d (IdentityT m) s where
   getCapabilities = lift getCapabilities
   liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
+  catchAccessError action handler = IdentityT $
+    catchAccessError (runIdentityT action) (runIdentityT . handler)
 
 instance MonadSafeAccess d m s => MonadSafeAccess d (ListT m) s where
   getCapabilities = lift getCapabilities
   liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
+  catchAccessError action handler = ListT $
+    catchAccessError (runListT action) (runListT . handler)
 
 instance MonadSafeAccess d m s => MonadSafeAccess d (MaybeT m) s where
   getCapabilities = lift getCapabilities
   liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
+  catchAccessError action handler = MaybeT $
+    catchAccessError (runMaybeT action) (runMaybeT . handler)
 
 instance MonadSafeAccess d m s => MonadSafeAccess d (ReaderT r m) s where
   getCapabilities = lift getCapabilities
   liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
+  catchAccessError action handler = ReaderT $ \r ->
+    catchAccessError (runReaderT action r)
+                     (\descr -> runReaderT (handler descr) r)
 
 instance (MonadSafeAccess d m s, Monoid w)
     => MonadSafeAccess d (RWST r w st m) s where
   getCapabilities = lift getCapabilities
   liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
+  catchAccessError action handler = RWST $ \r s ->
+    catchAccessError (runRWST action r s)
+                     (\descr -> runRWST (handler descr) r s)
 
 instance (MonadSafeAccess d m s, Monoid w)
     => MonadSafeAccess d (WriterT w m) s where
   getCapabilities = lift getCapabilities
   liftSub         = lift . liftSub
   denyAccess      = lift . denyAccess
+  catchAccessError action handler = WriterT $
+    catchAccessError (runWriterT action) (runWriterT . handler)

@@ -1,5 +1,5 @@
 name:                safe-access
-version:             0.3.2.1
+version:             0.3.3.0
 synopsis:            A simple environment to control access to data
 description:         This is a small capability-based interface to check legitimacy of accesses in different parts of the program depending on the context in which the data is accessed. See the README.md in the repository for a longer explanation and an example.
 license:             BSD3
@@ -14,7 +14,7 @@ homepage:            http://darcs.redspline.com/safe-access
 source-repository head
   type:              darcs
   location:          http://darcs.redspline.com/safe-access
-  tag:               0.3.2.1
+  tag:               0.3.3.0
 
 library
   exposed-modules:   Control.SafeAccess
