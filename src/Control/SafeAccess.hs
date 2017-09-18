@@ -209,6 +209,14 @@ instance MonadSafeAccess d m s => MonadSafeAccess d (ExceptT e m) s where
   catchAccessError action handler = ExceptT $
     catchAccessError (runExceptT action) (runExceptT . handler)
 
+instance MonadSafeAccess d m s => MonadSafeAccess d (StateT s' m) s where
+  getCapabilities = lift getCapabilities
+  liftSub         = lift . liftSub
+  denyAccess      = lift . denyAccess
+  catchAccessError action handler = StateT $ \s ->
+    catchAccessError (runStateT action s)
+                     (\descr -> runStateT (handler descr) s)
+
 instance MonadSafeAccess d m s => MonadSafeAccess d (IdentityT m) s where
   getCapabilities = lift getCapabilities
   liftSub         = lift . liftSub
