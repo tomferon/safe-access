@@ -34,10 +34,13 @@ import Control.Monad.Writer
 -- @d@ is the type describing an access.
 newtype Capability m d = MkCapability { runCapability :: d -> m AccessDecision }
 
+instance Applicative m => Semigroup (Capability m d) where
+  (<>) cap1 cap2 = MkCapability $ \d ->
+    (<>) <$> runCapability cap1 d <*> runCapability cap2 d
+
 instance Applicative m => Monoid (Capability m d) where
   mempty = MkCapability $ \_ -> pure mempty
-  mappend cap1 cap2 = MkCapability $ \d ->
-    mappend <$> runCapability cap1 d <*> runCapability cap2 d
+  mappend = (<>)
 
 type Capabilities m d = [Capability m d]
 
@@ -65,14 +68,17 @@ data AccessDecision
   | AccessDenied      -- ^ Final no
   deriving (Show, Eq)
 
-instance Monoid AccessDecision where
-  mempty      = AccessDeniedSoft
-  mappend a b = case (a, b) of
+instance Semigroup AccessDecision where
+  a <> b = case (a, b) of
     (AccessDeniedSoft, _)          -> b
     (_, AccessDeniedSoft)          -> a
     (AccessDenied, _)              -> AccessDenied
     (_, AccessDenied)              -> AccessDenied
     (AccessGranted, AccessGranted) -> AccessGranted
+
+instance Monoid AccessDecision where
+  mempty = AccessDeniedSoft
+  mappend = (<>)
 
 -- | A simple monad transformer to ensure that data are accessed legitimately.
 --
