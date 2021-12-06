@@ -1,5 +1,5 @@
 name:                safe-access
-version:             0.3.3.1
+version:             0.4.0.0
 synopsis:            A simple environment to control access to data
 description:         This is a small capability-based interface to check legitimacy of accesses in different parts of the program depending on the context in which the data is accessed. See the README.md in the repository for a longer explanation and an example.
 license:             BSD3
@@ -9,12 +9,12 @@ maintainer:          tho.feron@gmail.com
 category:            Security
 build-type:          Simple
 cabal-version:       >=1.10
-homepage:            http://github.com/thoferon/safe-access
+homepage:            http://github.com/tomferon/safe-access
 
 source-repository head
   type:              git
-  location:          http://github.com/thoferon/safe-access.git
-  tag:               0.3.3.1
+  location:          http://github.com/tomferon/safe-access.git
+  tag:               0.4.0.0
 
 library
   exposed-modules:   Control.SafeAccess
