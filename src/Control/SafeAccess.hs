@@ -109,7 +109,6 @@ instance Applicative f => Applicative (SafeAccessT d b f) where
     in ff <*> fea
 
 instance Monad m => Monad (SafeAccessT d b m) where
-  return = SafeAccessT . const . return . Right
   ma >>= f = SafeAccessT $ \caps -> do
     ex <- runSafeAccessT ma caps
     case ex of
